@@ -1,7 +1,10 @@
 import tempfile
 import unittest
+from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
+from main import main
 from time_validator import find_in_file, find_times, is_valid_time
 
 
@@ -32,14 +35,20 @@ class TimeValidationTests(unittest.TestCase):
     def test_all_minutes_and_seconds(self):
         for number in range(100):
             with self.subTest(number=number):
-                self.assertEqual(is_valid_time(f"12:{number:02}:00"), number < 60)
-                self.assertEqual(is_valid_time(f"12:00:{number:02}"), number < 60)
+                self.assertEqual(
+                    is_valid_time(f"12:{number:02}:00"), number < 60
+                )
+                self.assertEqual(
+                    is_valid_time(f"12:00:{number:02}"), number < 60
+                )
 
 
 class TimeSearchTests(unittest.TestCase):
     def test_search_with_punctuation(self):
         text = "Начало (09:00:00), конец - 23:59:59.\n[00:00:00]"
-        self.assertEqual(find_times(text), ["09:00:00", "23:59:59", "00:00:00"])
+        self.assertEqual(
+            find_times(text), ["09:00:00", "23:59:59", "00:00:00"]
+        )
 
     def test_search_preserves_duplicates(self):
         self.assertEqual(find_times("09:00:00; 09:00:00"),
@@ -67,7 +76,9 @@ class FileSearchTests(unittest.TestCase):
     def test_utf8_file(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "schedule.txt"
-            path.write_text("Начало: 09:00:00\nКонец: 12:30:00", encoding="utf-8")
+            path.write_text(
+                "Начало: 09:00:00\nКонец: 12:30:00", encoding="utf-8"
+            )
             self.assertEqual(find_in_file(path), ["09:00:00", "12:30:00"])
 
     def test_file_with_bom(self):
@@ -93,6 +104,42 @@ class FileSearchTests(unittest.TestCase):
             path.write_bytes(b"\xff\xfe\xff")
             with self.assertRaises(UnicodeError):
                 find_in_file(path)
+
+
+class MenuTests(unittest.TestCase):
+    def run_menu(self, answers):
+        with patch("builtins.input", side_effect=answers):
+            with patch("sys.stdout", new_callable=StringIO) as output:
+                main()
+                return output.getvalue()
+
+    def test_validation_and_unknown_choice(self):
+        output = self.run_menu(["5", "1", "09:00:00", "1", "24:00:00", "0"])
+        self.assertIn("Такого пункта нет", output)
+        self.assertIn("Время записано правильно", output)
+        self.assertIn("Неверное время", output)
+        self.assertIn("Работа завершена", output)
+
+    def test_search_results_and_empty_file(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "schedule.txt"
+            path.write_text("Начало: 09:00:00", encoding="utf-8")
+            output = self.run_menu(["2", str(path), "0"])
+            self.assertIn("Найдено записей: 1", output)
+            self.assertIn("09:00:00", output)
+            path.write_text("Без записей времени", encoding="utf-8")
+            output = self.run_menu(["2", str(path), "0"])
+            self.assertIn("Время в файле не найдено", output)
+
+    def test_file_errors_return_to_menu(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "wrong.txt"
+            path.write_bytes(b"\xff\xfe\xff")
+            missing = Path(folder) / "missing.txt"
+            output = self.run_menu(["2", str(missing), "2", str(path), "0"])
+            self.assertIn("Не удалось открыть файл", output)
+            self.assertIn("Нужна кодировка UTF-8", output)
+            self.assertIn("Работа завершена", output)
 
 
 if __name__ == "__main__":
